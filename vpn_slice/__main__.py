@@ -23,8 +23,9 @@ from .util import slurpy
 def get_default_providers():
     global platform
     if platform.startswith('linux'):
+        from .crossos import DigProvider
         from .linux import ProcfsProvider, Iproute2Provider, IptablesProvider, CheckTunDevProvider
-        from .posix import DigProvider, PosixHostsFileProvider
+        from .posix import PosixHostsFileProvider
         return dict(
             process = ProcfsProvider,
             route = Iproute2Provider,
@@ -34,13 +35,29 @@ def get_default_providers():
             prep = CheckTunDevProvider,
         )
     elif platform.startswith('darwin'):
+        from .crossos import DigProvider
         from .mac import PsProvider, BSDRouteProvider
-        from .posix import DigProvider, PosixHostsFileProvider
+        from .posix import PosixHostsFileProvider
         return dict(
             process = PsProvider,
             route = BSDRouteProvider,
             dns = DigProvider,
             hosts = PosixHostsFileProvider,
+        )
+    elif platform.startswith("win32"):
+        from .crossos import DigProvider
+        from .win import (
+            Win32ProcessProvider,
+            WinRouteProvider,
+            WinHostsFileProvider,
+        )
+        DigProvider.dig = "wsl.exe dig"
+
+        return dict(
+            process=Win32ProcessProvider,
+            route=WinRouteProvider,
+            dns=DigProvider,
+            hosts=WinHostsFileProvider,
         )
     else:
         return dict(

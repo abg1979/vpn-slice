@@ -3,12 +3,12 @@ import re
 import subprocess
 from ipaddress import ip_network
 
-from .posix import PosixProcessProvider
+from .crossos import CrossOsProcessProvider
 from .provider import RouteProvider
 from .util import get_executable
 
 
-class PsProvider(PosixProcessProvider):
+class PsProvider(CrossOsProcessProvider):
     def __init__(self):
         self.lsof = get_executable('/usr/sbin/lsof')
         self.ps = get_executable('/bin/ps')

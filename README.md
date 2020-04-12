@@ -68,6 +68,8 @@ traffic as possible through those VPNs.
     (used for all routing setup)
   * macOS 10.x with BSD
     [`route`](https://en.wikipedia.org/wiki/Route_(command))
+  * Windows 10 with PowerShell and WSL's `wsl.exe dig` or Cygwin's
+    [`dig.exe`](https://cygwin.com/packages/summary/bind-utils.html)
 
 You can install the latest build with `pip` (make sure you are using
 the Python 3.x version, usually invoked with `pip3`):

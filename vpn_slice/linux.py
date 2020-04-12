@@ -2,12 +2,12 @@ import os
 import subprocess
 import stat
 
-from .posix import PosixProcessProvider
+from .crossos import CrossOsProcessProvider
 from .provider import FirewallProvider, RouteProvider, TunnelPrepProvider
 from .util import get_executable
 
 
-class ProcfsProvider(PosixProcessProvider):
+class ProcfsProvider(CrossOsProcessProvider):
     def pid2exe(self, pid):
         try:
             return os.readlink('/proc/%d/exe' % pid)

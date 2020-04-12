@@ -35,6 +35,7 @@ Requirements
        `iptables <https://en.wikipedia.org/wiki/iptables>`__ utilities
        (used for all routing setup)
     -  macOS 10.x
+    -  Windows 10
 
 Usage
 -----
