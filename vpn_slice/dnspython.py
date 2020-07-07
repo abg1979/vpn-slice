@@ -1,9 +1,11 @@
-from sys import stderr
-from ipaddress import ip_address, ip_interface
-from dns.resolver import Resolver, NXDOMAIN, NoAnswer, Timeout
+import logging
+from ipaddress import ip_address
+
 from dns.name import root, from_text
+from dns.resolver import Resolver, NXDOMAIN, NoAnswer, Timeout
 
 from .provider import DNSProvider
+
 
 class DNSPythonProvider(DNSProvider):
     def configure(self, dns_servers, *, bind_addresses=None, search_domains=()):
@@ -20,6 +22,7 @@ class DNSPythonProvider(DNSProvider):
             self.rectypes.append('AAAA')
 
     def lookup_host(self, hostname, keep_going=True):
+        logger = logging.getLogger(__name__)
         result = set()
 
         for source in self.bind_addresses or [None]:
@@ -33,9 +36,9 @@ class DNSPythonProvider(DNSProvider):
             for rectype in self.rectypes:
                 try:
                     # print("Issuing query for hostname %r, rectype %r, source %r, search_domains %r, nameservers %r" % (
-                    #     hostname, rectype, source, self.resolver.search_domains, self.resolver.nameservers), file=stderr)
+                    #     hostname, rectype, source, self.resolver.search_domains, self.resolver.nameservers))
                     a = self.resolver.query(hostname, rectype, source=str(source))
-                    print("Got results: %r" % list(a), file=stderr)
+                    logger.info("Got results: %r" % list(a))
                 except (NXDOMAIN, NoAnswer):
                     pass
                 except Timeout:

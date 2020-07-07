@@ -129,16 +129,29 @@ class HostsProvider(metaclass=ABCMeta):
 
         """
 
+    @abstractmethod
+    def lock_hosts(self, handle):
+        """Lock the hosts file if possible.
+
+        """
+
 class TunnelPrepProvider:
-    def create_tunnel(self):
+    def create_tunnel(self, env, args):
         """Create tunnel device.
 
         Base class behavior is to do nothing.
 
         """
 
-    def prepare_tunnel(self):
+    def prepare_tunnel(self, env, args):
         """Prepare operating system to create tunnel devices.
+
+        Base class behavior is to do nothing.
+
+        """
+
+    def pre_connect(self, env, args):
+        """Prepare operating system for connection.
 
         Base class behavior is to do nothing.
 

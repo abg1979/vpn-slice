@@ -5,3 +5,9 @@
 
 build/
 dist/
+
+.venv
+.idea
+*.log
+test.py
+*.lock

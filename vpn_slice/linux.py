@@ -91,11 +91,12 @@ class IptablesProvider(FirewallProvider):
 
 
 class CheckTunDevProvider(TunnelPrepProvider):
-    def create_tunnel(self):
+    def create_tunnel(self, env, args):
         node = '/dev/net/tun'
         if not os.path.exists(node):
             os.makedirs(os.path.dirname(node), exist_ok=True)
             os.mknod(node, mode=0o640 | stat.S_IFCHR, device = os.makedev(10, 200))
-    def prepare_tunnel(self):
+
+    def prepare_tunnel(self, env, args):
         if not os.access('/dev/net/tun', os.R_OK | os.W_OK):
             raise OSError("can't read and write /dev/net/tun")

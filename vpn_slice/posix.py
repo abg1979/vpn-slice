@@ -1,4 +1,3 @@
-import fcntl
 import os
 import subprocess
 from ipaddress import ip_address
@@ -75,7 +74,7 @@ class HostsFileProvider(HostsProvider):
     def write_hosts(self, host_map, name):
         tag = 'vpn-slice-{} AUTOCREATED'.format(name)
         with open(self.path, 'r+') as hostf:
-            fcntl.flock(hostf, fcntl.LOCK_EX)  # POSIX only, obviously
+            self.lock_hosts(hostf)
             lines = hostf.readlines()
             keeplines = [l for l in lines if not l.endswith('# %s\n' % tag)]
             hostf.seek(0, 0)
@@ -89,6 +88,10 @@ class HostsFileProvider(HostsProvider):
 class PosixHostsFileProvider(HostsFileProvider):
     def __init__(self):
         super().__init__('/etc/hosts')
+
+    def lock_hosts(self, handle):
+        import fcntl
+        fcntl.flock(handle, fcntl.LOCK_EX)  # POSIX only, obviously
 
 
 class PosixProcessProvider(ProcessProvider):
