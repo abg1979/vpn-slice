@@ -4,6 +4,10 @@ from ipaddress import ip_interface
 
 class ProcessProvider(metaclass=ABCMeta):
     @abstractmethod
+    def get_caller(self):
+        """Get the caller of this script."""
+
+    @abstractmethod
     def pid2exe(self, pid):
         """Get the path to the executable running as a given PID."""
 

@@ -1,0 +1,38 @@
+name = "Sample VPN Slice Config"
+
+routes = [
+            '10.0.0.0/8',
+            'splunk-us.corp.adobe.com',
+            'klam-prod.corp.adobe.com',
+            'klam.corp.adobe.com',
+            'klam-sj.corp.adobe.com'
+         ]
+
+[subprocess]
+    kill = []
+    prevent_idle_timeout = false
+
+[info]
+    banner = false
+
+[routing]
+    incoming = false
+    # name =
+    # domain =
+    internal = false
+    splits = false
+    host_names = false
+    short_names = true
+
+[nameserver]
+    ns_hosts = false
+    nbns = false
+
+[debug]
+    verbose = 0
+    dump = true
+    debug = false
+
+
+
+

@@ -95,6 +95,23 @@ class PosixHostsFileProvider(HostsFileProvider):
 
 
 class PosixProcessProvider(ProcessProvider):
+
+    def __init__(self) -> None:
+        self.ignored_parents = ['dash', 'bash', 'sh', 'tcsh', 'csh', 'ksh', 'zsh',
+                                'python.exe', 'cscript.exe', 'cmd.exe', 'vpn-slice', 'vpn-slice.exe']
+
+    def get_caller(self):
+        # start from our parent and ignore any shell or python processes
+        ppid = self.ppid_of(None)
+        exe = self.pid2exe(ppid)
+        while exe:
+            if os.path.basename(exe) in self.ignored_parents:
+                ppid = self.ppid_of(ppid)
+                exe = self.pid2exe(ppid)
+            else:
+                break
+        return ppid
+
     def kill(self, pid, signal=SIGTERM):
         os.kill(pid, signal)
 

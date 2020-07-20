@@ -71,22 +71,26 @@ def parse_pwsh_table(lines):
 
 class Win32ProcessProvider(PosixProcessProvider):
     def __init__(self):
+        super().__init__()
         self.ps = get_executable("powershell.exe")
         self.pwsh = get_executable("pwsh.exe")
+        self.process_tree = None
 
     def get_process_tree(self, pid):
         logger = logging.getLogger(__name__)
-        expression = ["@{Expression={$_.Id};Alignment='Left';Name='Id'}",
-                      "@{Expression={$_.Parent.Id};Name='Parent';Alignment='Left'}", 'Path']
-        command = ['Get-Process', '|', 'Format-Table', '-AutoSize', ",".join(expression)]
-        info = win_exec([self.pwsh, '-Command', " ".join(command)])
-        lines = iter(info.splitlines())
-        info_d = parse_pwsh_table(lines)
+        if self.process_tree is None:
+            expression = ["@{Expression={$_.Id};Alignment='Left';Name='Id'}",
+                          "@{Expression={$_.Parent.Id};Name='Parent';Alignment='Left'}", 'Path']
+            command = ['Get-Process', '|', 'Format-Table', '-AutoSize', ",".join(expression)]
+            info = win_exec([self.pwsh, '-Command', " ".join(command)])
+            lines = iter(info.splitlines())
+            info_d = parse_pwsh_table(lines)
+            self.process_tree = info_d
         process_id = str(pid)
         p_tree = []
         while process_id:
             process_exists = False
-            for process_info in info_d:
+            for process_info in self.process_tree:
                 logger.debug("Checking [%s] with [%s]", process_info['Id'], process_id)
                 if process_info['Id'] == process_id:
                     process_exists = True
@@ -103,7 +107,7 @@ class Win32ProcessProvider(PosixProcessProvider):
     def pid2exe(self, pid):
         logger = logging.getLogger(__name__)
         process_tree = self.get_process_tree(pid)
-        logger.info("Found process info as [%s]", process_tree)
+        logger.debug("Found process info as [%s]", process_tree)
         if len(process_tree) > 0:
             return process_tree[0]['Path']
         return None
@@ -114,7 +118,7 @@ class Win32ProcessProvider(PosixProcessProvider):
             return os.getppid()
         process_tree = self.get_process_tree(pid)
         if len(process_tree) > 0:
-            return process_tree[0]['Parent']
+            return int(process_tree[0]['Parent'])
         return None
 
 
@@ -144,10 +148,6 @@ class WinRouteProvider(RouteProvider):
     # TODO destination can be IP or IP with mask, convert that
     def add_route(self, destination, via=None, dev=None, src=None, mtu=None, **kwargs):
         logger = logging.getLogger(__name__)
-        try:
-            self.remove_route(ip_network(destination))
-        except:
-            logger.warning("Failed to remove existing route to [%s]", destination)
         logger.info("Args: [%s],[%s],[%s],[%s],[%s],[%s]", destination, via, dev, src, mtu, kwargs)
         args = ["-AddressFamily", self._family_option(destination)]
         args.extend(['-DestinationPrefix', ip_network(destination)])
@@ -164,9 +164,11 @@ class WinRouteProvider(RouteProvider):
         else:
             dev = self.get_route(via)['dev']
             args.extend(['-InterfaceIndex', dev])
+        if 'metric' in kwargs:
+            args.extend(['-RouteMetric', int(kwargs['metric'])])
         args.extend(['-PolicyStore', 'ActiveStore'])
         logger.info("[%s] -- [%s]", args, kwargs)
-        win_exec([self.ps, 'New-NetRoute'] + args)
+        win_exec([self.ps, 'New-NetRoute'] + args, check=False)
 
     def replace_route(self, destination, via=None, dev=None, src=None, mtu=None, **kwargs):
         self.add_route(destination, via, dev, src, mtu, **kwargs)
@@ -188,6 +190,8 @@ class WinRouteProvider(RouteProvider):
         }
 
     def flush_cache(self):
+        logger = logging.getLogger(__name__)
+        logger.info("Flushing route cache.")
         win_exec(['netsh', 'interface', 'ip', 'delete', 'destinationcache'])
 
     def get_link_info(self, device):
@@ -207,19 +211,20 @@ class WinRouteProvider(RouteProvider):
     def set_link_info(self, device, state, mtu=None):
         logger = logging.getLogger(__name__)
         logger.info("[%s] -- [%s] -- [%s]", device, state, mtu)
-        if state is not None:
-            enable_adapter_args = ['Enable-NetAdapter', '-Name', device]
-            disable_adapter_args = ['Disable-NetAdapter', '-Name', device, '-Confirm:$false']
-            if state == 'up':
-                win_exec([self.ps] + enable_adapter_args)
-            else:
-                win_exec([self.ps] + disable_adapter_args)
+        # the adapter is already enabled for openconnect to start
+        # if state is not None:
+        #     enable_adapter_args = ['Enable-NetAdapter', '-Name', device]
+        #     disable_adapter_args = ['Disable-NetAdapter', '-Name', device, '-Confirm:$false']
+        #     if state == 'up':
+        #         win_exec([self.ps] + enable_adapter_args)
+        #     else:
+        #         win_exec([self.ps] + disable_adapter_args)
         if mtu is not None:
             args = ['Set-NetIPInterface']
             args.extend(('-InterfaceAlias', device))
             args.extend(("-NlMtuBytes", str(mtu)))
             args.extend(("-PolicyStore", "ActiveStore"))
-            # Set mtu
+            args.extend(("-InterfaceMetric", "1"))
             win_exec([self.ps] + args)
 
     def add_address(self, device, address):

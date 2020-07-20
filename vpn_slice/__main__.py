@@ -6,10 +6,11 @@ import os, subprocess as sp
 import argparse
 from enum import Enum
 from itertools import chain, zip_longest
-from ipaddress import ip_network, ip_address, IPv4Address, IPv4Network, IPv6Address, IPv6Network, IPv6Interface
+from ipaddress import ip_network, ip_address,  IPv4Address, IPv4Network, IPv6Address, IPv6Network, IPv6Interface
 from time import sleep
 from random import randint, choice, shuffle
 import logging
+import pathlib
 from filelock import FileLock
 
 try:
@@ -207,6 +208,13 @@ def do_connect(env, args):
         providers.route.flush_cache()
         logger.info("Added routes for %d nameservers, %d subnets, %d aliases." % (len(ns), len(args.subnets), len(args.aliases)))
 
+    # if we did not add any route above we will add a default route with metric 5
+    if not len(args.subnets):
+        internal_gw = next(env.network.hosts())
+        dest = ip_network('0.0.0.0/0')
+        logger.info("Adding route to %s %s through %s." % ('default', dest, internal_gw))
+        providers.route.replace_route(dest, dev=env.tundev, via=internal_gw, metric=1)
+
     # restore routes to excluded subnets
     for dest, exc_route in exc_subnets:
         providers.route.replace_route(dest, **exc_route)
@@ -399,15 +407,54 @@ def parse_env(environ=os.environ):
     return env
 
 
+config_args = [
+    ('routes', lambda config: [net_or_host_param(s) for s in config['routes']]),
+    ('fork', lambda config: config['subprocess']['fork']),
+    ('kill', lambda config: config['subprocess']['kill']),
+    ('prevent_idle_timeout', lambda config: config['subprocess']['prevent_idle_timeout']),
+    ('banner', lambda config: config['info']['banner']),
+    ('incoming', lambda config: config['routing']['incoming']),
+    ('name', lambda config: config['routing']['name']),
+    ('domain', lambda config: config['routing']['domain']),
+    ('route_internal', lambda config: config['routing']['internal']),
+    ('route_splits', lambda config: config['routing']['splits']),
+    ('host_names', lambda config: config['routing']['host_names']),
+    ('short_names', lambda config: config['routing']['short_names']),
+    ('ns_hosts', lambda config: config['nameserver']['ns_hosts']),
+    ('nbns', lambda config: config['nameserver']['nbns']),
+    ('dump', lambda config: config['debug']['dump']),
+    ('verbose', lambda config: config['debug']['verbose']),
+    ('debug', lambda config: config['debug']['debug']),
+]
+
+
+def load_config(config_path, args):
+    logger = logging.getLogger(__name__)
+    if not config_path.exists():
+        return
+    import toml
+    with config_path.open() as config_handle:
+        config = toml.load(config_handle)
+    for arg, maker in config_args:
+        try:
+            val = maker(config)
+            args.__setattr__(arg, val)
+        except KeyError:
+            logger.debug("Could not find arg [%s] in config", arg)
+
+
 # Parse command-line arguments and environment
 def parse_args_and_env(args=None, environ=os.environ):
     p = argparse.ArgumentParser()
     p.add_argument('routes', nargs='*', type=net_or_host_param,
                    help='List of VPN-internal hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
+    p.add_argument('-c', '--config', type=pathlib.Path,
+                   default=pathlib.Path(os.path.expanduser("~/.config/vpn-slice/config.toml")),
+                   required=False)
     g = p.add_argument_group('Subprocess options')
-    p.add_argument('-k', '--kill', default=[], action='append',
+    g.add_argument('-k', '--kill', default=[], action='append',
                    help='File containing PID to kill before disconnect (may be specified multiple times)')
-    p.add_argument('-K', '--prevent-idle-timeout', action='store_true',
+    g.add_argument('-K', '--prevent-idle-timeout', action='store_true',
                    help='Prevent idle timeout by doing random DNS lookups (interval set by $IDLE_TIMEOUT, defaulting to 10 minutes)')
     g = p.add_argument_group('Informational options')
     g.add_argument('--banner', action='store_true', help='Print banner message (default is to suppress it)')
@@ -435,13 +482,21 @@ def parse_args_and_env(args=None, environ=os.environ):
                    help='Stop after verifying that environment variables and providers are configured properly.')
     g.add_argument('-v', '--verbose', default=0, action='count', help="Explain what %(prog)s is doing")
     p.add_argument('-V', '--version', action='version', version='%(prog)s ' + __version__)
-    g.add_argument('-D', '--dump', action='store_true', help='Dump environment variables passed by caller')
+    g.add_argument('-D', '--dump', default=True, action='store_false', help='Dump environment variables passed by caller')
     g.add_argument('--no-fork', action='store_false', dest='fork',
                    help="Don't fork and continue in background on connect")
     g.add_argument('--ppid', type=int,
                    help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
     g.add_argument('--debug', action='store_true', default=False, help="Connect using pycharm remote debug.")
     args = p.parse_args(args)
+    logger = logging.getLogger(__name__)
+    if 'config' in args and args.config is not None and args.config.exists():
+        logger.info("Trying to load config from file. [%s].", args.config)
+        load_config(args.config, args)
+    elif 'VPN_SLICE_CONFIG' in environ:
+        logger.info("Trying to load config from environment. [%s]", environ['VPN_SLICE_CONFIG'])
+        load_config(pathlib.Path(environ['VPN_SLICE_CONFIG']), args)
+
     env = parse_env(environ)
     return p, args, env
 
@@ -460,10 +515,7 @@ def finalize_args_and_env(args, env):
     # windows
     # openconnect -> shell -> cscript -> shell -> python (vpn-slice)
     if args.ppid is None:
-        args.ppid = providers.process.ppid_of(None)
-        exe = providers.process.pid2exe(args.ppid)
-        if exe and os.path.basename(exe) in ('dash', 'bash', 'sh', 'tcsh', 'csh', 'ksh', 'zsh'):
-            args.ppid = providers.process.ppid_of(args.ppid)
+        args.ppid = providers.process.get_caller()
 
     # use the list from the env if --domain wasn't specified, but start with an
     # empty list if it was specified; hence can't use 'default' here:
@@ -556,7 +608,9 @@ def main(args=None, environ=os.environ):
         do_pre_init(env, args)
     elif env.reason == reasons.disconnect:
         do_disconnect(env, args)
-    elif env.reason in (reasons.reconnect, reasons.attempt_reconnect):
+    elif env.reason == reasons.reconnect:
+        do_post_connect(env, args)
+    elif env.reason == reasons.attempt_reconnect:
         # FIXME: is there anything that reconnect or attempt_reconnect /should/ do
         # on a modern system (Linux) which automatically removes routes to
         # a tunnel adapter that has been removed? I am not clear on whether
@@ -585,7 +639,11 @@ def main(args=None, environ=os.environ):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, filename="vpnc.%s.log" % os.environ['reason'], filemode='a',
+    if 'reason' in os.environ:
+        log_file = "vpnc.%s.log" % os.environ['reason']
+    else:
+        log_file = "vpnc.console.log"
+    logging.basicConfig(level=logging.INFO, filename=log_file, filemode='a',
                         format='%(asctime)s %(levelname)s %(funcName)s %(message)s')
     lock = FileLock("vpnc.lock")
     with lock:
