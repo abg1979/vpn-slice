@@ -10,8 +10,10 @@ from ipaddress import ip_network, ip_address,  IPv4Address, IPv4Network, IPv6Add
 from time import sleep
 from random import randint, choice, shuffle
 import logging
+import logging.handlers
 import pathlib
 from filelock import FileLock
+import pprint
 
 try:
     from setproctitle import setproctitle
@@ -117,7 +119,12 @@ def do_disconnect(env, args):
     logger = logging.getLogger(__name__)
     global providers
     for pidfile in args.kill:
+        if not pidfile:
+            continue
         try:
+            pidfileentry = open(pidfile).read()
+            if not pidfileentry:
+                continue
             pid = int(open(pidfile).read())
         except (IOError, ValueError):
             logger.warning("WARNING: could not read pid from %s" % pidfile)
@@ -425,6 +432,7 @@ config_args = [
     ('dump', lambda config: config['debug']['dump']),
     ('verbose', lambda config: config['debug']['verbose']),
     ('debug', lambda config: config['debug']['debug']),
+    ('split_routes', lambda config: [net_or_host_param(s) for s in config['split_routes']]),
 ]
 
 
@@ -488,6 +496,9 @@ def parse_args_and_env(args=None, environ=os.environ):
     g.add_argument('--ppid', type=int,
                    help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
     g.add_argument('--debug', action='store_true', default=False, help="Connect using pycharm remote debug.")
+    p.add_argument('--split-routes', nargs='*', type=net_or_host_param,
+                   help='List of split VPN hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
+
     args = p.parse_args(args)
     logger = logging.getLogger(__name__)
     if 'config' in args and args.config is not None and args.config.exists():
@@ -602,6 +613,9 @@ def main(args=None, environ=os.environ):
             print('***************************************************************************', file=stderr)
             raise SystemExit()
 
+    logger.info("Args : [%s]" % pprint.pformat(args))
+    logger.info("Env : [%s]" % pprint.pformat(env))
+
     if env.reason is None:
         raise SystemExit("Must be called as vpnc-script, with $reason set; use --help for more information")
     elif env.reason == reasons.pre_init:
@@ -621,7 +635,7 @@ def main(args=None, environ=os.environ):
         #   https://github.com/dlenski/vpn-slice/pull/14#issuecomment-488129621
 
         if args.verbose:
-            logger.warning('WARNING: %s ignores reason=%s' % (p.prog, env.reason.name))
+            logger.warninig('WARNING: %s ignores reason=%s' % (p.prog, env.reason.name))
     elif env.reason == reasons.connect:
         if 'prep' in providers:
             providers.prep.pre_connect(env, args)
@@ -639,12 +653,9 @@ def main(args=None, environ=os.environ):
 
 
 if __name__ == '__main__':
-    if 'reason' in os.environ:
-        log_file = "vpnc.%s.log" % os.environ['reason']
-    else:
-        log_file = "vpnc.console.log"
-    logging.basicConfig(level=logging.INFO, filename=log_file, filemode='a',
-                        format='%(asctime)s %(levelname)s %(funcName)s %(message)s')
+    timed_rotating_handler = logging.handlers.TimedRotatingFileHandler(filename='vpnc.log', when='D')
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
+                        handlers=[timed_rotating_handler])
     lock = FileLock("vpnc.lock")
     with lock:
         main()

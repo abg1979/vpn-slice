@@ -2,7 +2,7 @@ import os
 import pathlib
 import re
 import subprocess
-from ipaddress import ip_network
+from ipaddress import ip_network, IPv4Network
 
 from .posix import HostsFileProvider, PosixProcessProvider
 from .provider import RouteProvider, TunnelPrepProvider
@@ -180,6 +180,10 @@ class WinRouteProvider(RouteProvider):
                   '-DestinationPrefix', destination, '-Confirm:$false'])
 
     def get_route(self, destination):
+        logger = logging.getLogger(__name__)
+        logger.info("[%s]", destination)
+        if type(destination) is IPv4Network:
+            destination = destination[0]
         info = win_exec([self.ps, 'Find-NetRoute', '-RemoteIPAddress', destination])
         lines = iter(info.splitlines())
         info_d = parse_pwsh_flat_table(lines)
