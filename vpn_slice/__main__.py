@@ -49,13 +49,26 @@ def get_default_providers():
             prep=CheckTunDevProvider,
         )
     elif platform.startswith('darwin'):
-        from .mac import PsProvider, BSDRouteProvider
-        from .posix import PosixHostsFileProvider, DigProvider
+        from .mac import PsProvider, BSDRouteProvider, MacSplitDNSProvider
+        from .posix import PosixHostsFileProvider
+        from .dnspython import DNSPythonProvider
         return dict(
             process=PsProvider,
             route=BSDRouteProvider,
             dns=DNSPythonProvider or DigProvider,
             hosts=PosixHostsFileProvider,
+            domain_vpn_dns = MacSplitDNSProvider,
+        )
+    elif platform.startswith('freebsd'):
+        from .mac import BSDRouteProvider
+        from .freebsd import ProcfsProvider
+        from .posix import PosixHostsFileProvider
+        from .dnspython import DNSPythonProvider
+        return dict(
+            process = ProcfsProvider,
+            route = BSDRouteProvider,
+            dns = DNSPythonProvider or DigProvider,
+            hosts = PosixHostsFileProvider,
         )
     elif platform.startswith('win'):
         from .posix import DigProvider
@@ -154,6 +167,13 @@ def do_disconnect(env, args):
             logger.warning("WARNING: failed to deconfigure firewall for VPN interface (%s)" % env.tundev)
 
 
+    if args.vpn_domains is not None:
+        try:
+            providers.domain_vpn_dns.deconfigure_domain_vpn_dns(args.vpn_domains, env.dns)
+        except:
+            print("WARNING: failed to deconfigure domains vpn dns", file=stderr)
+
+
 def do_connect(env, args):
     logger = logging.getLogger(__name__)
     global providers
@@ -163,9 +183,16 @@ def do_connect(env, args):
             print("| " + l)
 
     # set explicit route to gateway
-    gwr = providers.route.get_route(env.gateway)
-    providers.route.replace_route(env.gateway, **gwr)
-    logger.info("Set explicit route to VPN gateway %s (%s)" % (env.gateway, ', '.join('%s %s' % kv for kv in gwr.items())))
+    if env.gateway.is_loopback:
+        print("WARNING: Gateway address is loopback (%s); probably a local proxy.", file=stderr)
+    else:
+        gwr = providers.route.get_route(env.gateway)
+        if gwr:
+            providers.route.replace_route(env.gateway, **gwr)
+            if args.verbose > 1:
+                logger.info("Set explicit route to VPN gateway %s (%s)" % (env.gateway, ', '.join('%s %s' % kv for kv in gwr.items())))
+        else:
+            logger.info("WARNING: no route to VPN gateway found %s; cannot set explicit route to it." % env.gateway)
 
     # drop incoming traffic from VPN
     if not args.incoming:
@@ -204,7 +231,13 @@ def do_connect(env, args):
         providers.route.add_address(env.tundev, env.myaddr6)
 
     # save routes for excluded subnets
-    exc_subnets = [(dest, providers.route.get_route(dest)) for dest in args.exc_subnets]
+    exc_subnets = []
+    for dest in args.exc_subnets:
+        r = providers.route.get_route(dest)
+        if r:
+            exc_subnets.append((dest, r))
+        else:
+            print("WARNING: Ignoring unroutable split-exclude %s" % dest, file=stderr)
 
     # set up routes to the DNS and Windows name servers, subnets, and local aliases
     ns = env.dns + env.dns6 + (env.nbns if args.nbns else [])
@@ -229,6 +262,14 @@ def do_connect(env, args):
     else:
         providers.route.flush_cache()
         logger.warning("Restored routes for %d excluded subnets %s.", len(exc_subnets), exc_subnets)
+
+
+    # Use vpn dns for provided domains
+    if args.vpn_domains is not None:
+        if 'domain_vpn_dns' not in providers:
+            print("WARNING: no split dns provider available; can't split dns", file=stderr)
+        else:
+            providers.domain_vpn_dns.configure_domain_vpn_dns(args.vpn_domains, env.dns)
 
 
 def do_post_connect(env, args):
@@ -322,6 +363,7 @@ vpncenv = [
     ('gateway', 'VPNGATEWAY', ip_address),
     ('tundev', 'TUNDEV', str),
     ('domain', 'CISCO_DEF_DOMAIN', lambda x: x.split(), []),
+    ('splitdns','CISCO_SPLIT_DNS',lambda x: x.split(','),[]),
     ('banner', 'CISCO_BANNER', str),
     ('myaddr', 'INTERNAL_IP4_ADDRESS', IPv4Address),  # a.b.c.d
     ('mtu', 'INTERNAL_IP4_MTU', int),
@@ -491,14 +533,12 @@ def parse_args_and_env(args=None, environ=os.environ):
     g.add_argument('-v', '--verbose', default=0, action='count', help="Explain what %(prog)s is doing")
     p.add_argument('-V', '--version', action='version', version='%(prog)s ' + __version__)
     g.add_argument('-D', '--dump', default=True, action='store_false', help='Dump environment variables passed by caller')
-    g.add_argument('--no-fork', action='store_false', dest='fork',
-                   help="Don't fork and continue in background on connect")
-    g.add_argument('--ppid', type=int,
-                   help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
+    g.add_argument('--no-fork', action='store_false', dest='fork', help="Don't fork and continue in background on connect")
+    g.add_argument('--ppid', type=int, help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
+    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None, help="comma seperated domains to query with vpn dns")
     g.add_argument('--debug', action='store_true', default=False, help="Connect using pycharm remote debug.")
     p.add_argument('--split-routes', nargs='*', type=net_or_host_param,
                    help='List of split VPN hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
-
     args = p.parse_args(args)
     logger = logging.getLogger(__name__)
     if 'config' in args and args.config is not None and args.config.exists():
@@ -551,6 +591,9 @@ def finalize_args_and_env(args, env):
     if args.route_splits:
         args.subnets.extend(env.splitinc)
         args.exc_subnets.extend(env.splitexc)
+    if args.vpn_domains is not None:
+        args.vpn_domains = str.split(args.vpn_domains, ',')
+
 
 
 def main(args=None, environ=os.environ):

@@ -2,7 +2,7 @@ vpn-slice
 =========
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Build Status](https://api.travis-ci.org/dlenski/vpn-slice.png)](https://travis-ci.org/dlenski/vpn-slice)
+[![Build Status](https://github.com/dlenski/vpn-slice/workflows/test_and_release/badge.svg)](https://github.com/dlenski/vpn-slice/actions?query=workflow%3Atest_and_release)
 [![PyPI](https://img.shields.io/pypi/v/vpn-slice.svg)](https://pypi.python.org/pypi/vpn-slice)
 [![Homebrew](https://img.shields.io/homebrew/v/vpn-slice.svg)](https://formulae.brew.sh/formula/vpn-slice)
 
@@ -70,6 +70,9 @@ traffic as possible through those VPNs.
     (used for all routing setup)
   * macOS 10.x with BSD
     [`route`](https://en.wikipedia.org/wiki/Route_(command))
+  * FreeBSD with BSD
+    [`route`](https://en.wikipedia.org/wiki/Route_(command))
+    if [`procfs`](https://www.freebsd.org/cgi/man.cgi?query=procfs&sektion=5) is mounted
 
 You can install the latest build with `pip` (make sure you are using
 the Python 3.x version, usually invoked with `pip3`).

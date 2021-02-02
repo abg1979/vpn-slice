@@ -4,7 +4,7 @@ import subprocess
 from ipaddress import ip_network, ip_interface
 
 from .posix import PosixProcessProvider
-from .provider import RouteProvider
+from .provider import RouteProvider, SplitDNSProvider
 from .util import get_executable
 
 
@@ -59,22 +59,24 @@ class BSDRouteProvider(RouteProvider):
         self._route('delete', self._family_option(destination), destination)
 
     def get_route(self, destination):
+        # Format of BSD route get output: https://unix.stackexchange.com/questions/53446
         info = self._route('get', self._family_option(destination), destination)
         lines = iter(info.splitlines())
         info_d = {}
         for line in lines:
             if ':' not in line:
+                keys = line.split()
+                vals = next(lines).split()
+                info_d.update(zip(keys, vals))
                 break
-            key, _, val = line.partition(':')
+            key, val = line.split(':', 1)
             info_d[key.strip()] = val.strip()
-        keys = line.split()
-        vals = next(lines).split()
-        info_d.update(zip(keys, vals))
-        return {
-            'via': info_d['gateway'],
-            'dev': info_d['interface'],
-            'mtu': info_d['mtu'],
-        }
+        if 'gateway' in info_d or 'interface' in info_d:
+            return {
+                'via': info_d.get('gateway', None),
+                'dev': info_d.get('interface', None),
+                'mtu': info_d.get('mtu', None),
+            }
 
     def flush_cache(self):
         pass
@@ -110,3 +112,22 @@ class BSDRouteProvider(RouteProvider):
             # with BSD ifconfig. See example in default vpnc-script:
             #   https://gitlab.com/openconnect/vpnc-scripts/blob/https://gitlab.com/openconnect/vpnc-scripts/blob/921e8760/vpnc-script#L193
             self._ifconfig(device, 'inet', address.ip, address.ip, 'netmask', '255.255.255.255')
+
+
+class MacSplitDNSProvider(SplitDNSProvider):
+    def configure_domain_vpn_dns(self, domains, nameservers):
+        if not os.path.exists('/etc/resolver'):
+            os.makedirs('/etc/resolver')
+        for domain in domains:
+            resolver_file_name = "/etc/resolver/{0}".format(domain)
+            with open(resolver_file_name, "w") as resolver_file:
+                for nameserver in nameservers:
+                    resolver_file.write("nameserver {}\n".format(nameserver))
+
+    def deconfigure_domain_vpn_dns(self, domains, nameservers):
+        for domain in domains:
+            resolver_file_name = "/etc/resolver/{0}".format(domain)
+            if os.path.exists(resolver_file_name):
+                os.remove(resolver_file_name)
+        if not len(os.listdir('/etc/resolver')):
+            os.removedirs('/etc/resolver')
