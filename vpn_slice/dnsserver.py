@@ -1,10 +1,8 @@
 #!/usr/bin/env python3.6
 import logging
-import os
-import signal
 from datetime import datetime
 from textwrap import wrap
-from time import sleep
+import time
 
 from dnslib import DNSLabel, QTYPE, RR, dns
 from dnslib.proxy import ProxyResolver
@@ -86,11 +84,17 @@ class MultiUpstreamResolver(BaseResolver):
 class DNSRouteProvider(BaseResolver):
 
     def resolve(self, request, handler):
+        logger = logging.getLogger(__name__)
+        logger.info("Looking up [%s].", request.q)
         qname = request.q.qname
-        if qname:
-
-
-        return super().resolve(request, handler)
+        if qname and self.args is not None and self.args.host_patterns is not None:
+            for host_pattern in self.args.host_patterns:
+                if host_pattern.matches(qname):
+                    logger.info("[%s] matches [%s]", request.q, host_pattern)
+                    # should go to vpn
+                    return self.vpn_resolver.resolve(request, handler)
+        logger.info("Looking up in upstream resolvers [%s]", request.q)
+        return self.upstream_resolver.resolve(request, handler)
 
     def __init__(self, env, args, upstream_resolver, vpn_resolver) -> None:
         super().__init__()
@@ -115,3 +119,11 @@ class DNSServerProvider(object):
         logger.info('starting DNS server.')
         self.udp_server.start_thread()
         self.tcp_server.start_thread()
+
+
+if __name__ == '__main__':
+    provider = DNSServerProvider(None, None, ["192.168.10.20:53"], [])
+    provider.start()
+
+    while True:
+        time.sleep(0.2)

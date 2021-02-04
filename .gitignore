@@ -13,3 +13,4 @@ test.*
 *.lock
 *.log.*
 Pipfile
+*.iml

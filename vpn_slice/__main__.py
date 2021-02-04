@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 
-from __future__ import print_function
 from sys import stderr, platform
 import os, subprocess as sp
 import argparse
 from enum import Enum
 from itertools import chain, zip_longest
-from ipaddress import ip_network, ip_address,  IPv4Address, IPv4Network, IPv6Address, IPv6Network, IPv6Interface
+from ipaddress import ip_network, ip_address, IPv4Address, IPv4Network, IPv6Address, IPv6Network, IPv6Interface
 from time import sleep
 from random import randint, choice, shuffle
 import logging
@@ -51,25 +50,25 @@ def get_default_providers():
         )
     elif platform.startswith('darwin'):
         from .mac import PsProvider, BSDRouteProvider, MacSplitDNSProvider
-        from .posix import PosixHostsFileProvider
+        from .posix import PosixHostsFileProvider, DigProvider
         from .dnspython import DNSPythonProvider
         return dict(
             process=PsProvider,
             route=BSDRouteProvider,
             dns=DNSPythonProvider or DigProvider,
             hosts=PosixHostsFileProvider,
-            domain_vpn_dns = MacSplitDNSProvider,
+            domain_vpn_dns=MacSplitDNSProvider,
         )
     elif platform.startswith('freebsd'):
         from .mac import BSDRouteProvider
         from .freebsd import ProcfsProvider
-        from .posix import PosixHostsFileProvider
+        from .posix import PosixHostsFileProvider, DigProvider
         from .dnspython import DNSPythonProvider
         return dict(
-            process = ProcfsProvider,
-            route = BSDRouteProvider,
-            dns = DNSPythonProvider or DigProvider,
-            hosts = PosixHostsFileProvider,
+            process=ProcfsProvider,
+            route=BSDRouteProvider,
+            dns=DNSPythonProvider or DigProvider,
+            hosts=PosixHostsFileProvider,
         )
     elif platform.startswith('win'):
         from .posix import DigProvider
@@ -167,7 +166,6 @@ def do_disconnect(env, args):
         except sp.CalledProcessError:
             logger.warning("WARNING: failed to deconfigure firewall for VPN interface (%s)" % env.tundev)
 
-
     if args.vpn_domains is not None:
         try:
             providers.domain_vpn_dns.deconfigure_domain_vpn_dns(args.vpn_domains, env.dns)
@@ -191,7 +189,8 @@ def do_connect(env, args):
         if gwr:
             providers.route.replace_route(env.gateway, **gwr)
             if args.verbose > 1:
-                logger.info("Set explicit route to VPN gateway %s (%s)" % (env.gateway, ', '.join('%s %s' % kv for kv in gwr.items())))
+                logger.info("Set explicit route to VPN gateway %s (%s)" % (
+                env.gateway, ', '.join('%s %s' % kv for kv in gwr.items())))
         else:
             logger.info("WARNING: no route to VPN gateway found %s; cannot set explicit route to it." % env.gateway)
 
@@ -247,7 +246,8 @@ def do_connect(env, args):
         providers.route.replace_route(dest, dev=env.tundev)
     else:
         providers.route.flush_cache()
-        logger.info("Added routes for %d nameservers, %d subnets, %d aliases." % (len(ns), len(args.subnets), len(args.aliases)))
+        logger.info("Added routes for %d nameservers, %d subnets, %d aliases." % (
+        len(ns), len(args.subnets), len(args.aliases)))
 
     # if we did not add any route above we will add a default route with metric 5
     if not len(args.subnets):
@@ -259,11 +259,11 @@ def do_connect(env, args):
     # restore routes to excluded subnets
     for dest, exc_route in exc_subnets:
         providers.route.replace_route(dest, **exc_route)
-        logger.warning("Restoring split-exclude route to %s (%s)" % (dest, ', '.join('%s %s' % kv for kv in exc_route.items())))
+        logger.warning(
+            "Restoring split-exclude route to %s (%s)" % (dest, ', '.join('%s %s' % kv for kv in exc_route.items())))
     else:
         providers.route.flush_cache()
         logger.warning("Restored routes for %d excluded subnets %s.", len(exc_subnets), exc_subnets)
-
 
     # Use vpn dns for provided domains
     if args.vpn_domains is not None:
@@ -364,7 +364,7 @@ vpncenv = [
     ('gateway', 'VPNGATEWAY', ip_address),
     ('tundev', 'TUNDEV', str),
     ('domain', 'CISCO_DEF_DOMAIN', lambda x: x.split(), []),
-    ('splitdns','CISCO_SPLIT_DNS',lambda x: x.split(','),[]),
+    ('splitdns', 'CISCO_SPLIT_DNS', lambda x: x.split(','), []),
     ('banner', 'CISCO_BANNER', str),
     ('myaddr', 'INTERNAL_IP4_ADDRESS', IPv4Address),  # a.b.c.d
     ('mtu', 'INTERNAL_IP4_MTU', int),
@@ -393,7 +393,8 @@ def parse_env(environ=os.environ):
             try:
                 val = maker(environ[envar])
             except Exception as e:
-                logger.warning('Exception while setting %s from environment variable %s=%r' % (var, envar, environ[envar]))
+                logger.warning(
+                    'Exception while setting %s from environment variable %s=%r' % (var, envar, environ[envar]))
                 raise
         elif default:
             val, = default
@@ -406,7 +407,8 @@ def parse_env(environ=os.environ):
         orig_netaddr = env.network
         env.network = IPv4Network(env.network).supernet(new_prefix=env.netmasklen)
         if env.network.network_address != orig_netaddr:
-            logger.warning("WARNING: IPv4 network %s/%d has host bits set, replacing with %s" % (orig_netaddr, env.netmasklen, env.network))
+            logger.warning("WARNING: IPv4 network %s/%d has host bits set, replacing with %s" % (
+            orig_netaddr, env.netmasklen, env.network))
         if env.network.netmask != env.netmask:
             raise AssertionError(
                 "IPv4 network (INTERNAL_IP4_{{NETADDR,NETMASK}}) {ad}/{nm} does not match INTERNAL_IP4_NETMASKLEN={nml} (implies /{nmi})".format(
@@ -439,9 +441,12 @@ def parse_env(environ=os.environ):
         nml = int(environ['CISCO_SPLIT_%s_%d_MASKLEN' % (pfx, n)])
         net = IPv4Network(ad).supernet(new_prefix=nml)
         if net.network_address != ad:
-            logger.warning("WARNING: IPv4 split network (CISCO_SPLIT_%s_%d_{ADDR,MASK}) %s/%d has host bits set, replacing with %s" % (pfx, n, ad, nml, net))
+            logger.warning(
+                "WARNING: IPv4 split network (CISCO_SPLIT_%s_%d_{ADDR,MASK}) %s/%d has host bits set, replacing with %s" % (
+                pfx, n, ad, nml, net))
         if net.netmask != nm:
-            raise AssertionError("IPv4 split network (CISCO_SPLIT_{pfx}_{n}_{{ADDR,MASK}}) {ad}/{nm} does not match CISCO_SPLIT_{pfx}_{n}_MASKLEN={nml} (implies /{nmi})".format(
+            raise AssertionError(
+                "IPv4 split network (CISCO_SPLIT_{pfx}_{n}_{{ADDR,MASK}}) {ad}/{nm} does not match CISCO_SPLIT_{pfx}_{n}_MASKLEN={nml} (implies /{nmi})".format(
                     pfx=pfx, n=n, ad=ad, nm=nm, nml=nml, nmi=net.netmask))
         env['split' + pfx.lower()].append(net)
 
@@ -451,7 +456,9 @@ def parse_env(environ=os.environ):
         nml = int(environ['CISCO_IPV6_SPLIT_%s_%d_MASKLEN' % (pfx, n)])
         net = IPv6Network(ad).supernet(new_prefix=nml)
         if net.network_address != ad:
-            logger.warning("WARNING: IPv6 split network (CISCO_IPV6_SPLIT_%s_%d_{ADDR,MASKLEN}) %s/%d has host bits set, replacing with %s" % (pfx, n, ad, nml, net))
+            logger.warning(
+                "WARNING: IPv6 split network (CISCO_IPV6_SPLIT_%s_%d_{ADDR,MASKLEN}) %s/%d has host bits set, replacing with %s" % (
+                pfx, n, ad, nml, net))
         env['split' + pfx.lower()].append(net)
 
     return env
@@ -533,10 +540,14 @@ def parse_args_and_env(args=None, environ=os.environ):
                    help='Stop after verifying that environment variables and providers are configured properly.')
     g.add_argument('-v', '--verbose', default=0, action='count', help="Explain what %(prog)s is doing")
     p.add_argument('-V', '--version', action='version', version='%(prog)s ' + __version__)
-    g.add_argument('-D', '--dump', default=True, action='store_false', help='Dump environment variables passed by caller')
-    g.add_argument('--no-fork', action='store_false', dest='fork', help="Don't fork and continue in background on connect")
-    g.add_argument('--ppid', type=int, help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
-    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None, help="comma seperated domains to query with vpn dns")
+    g.add_argument('-D', '--dump', default=True, action='store_false',
+                   help='Dump environment variables passed by caller')
+    g.add_argument('--no-fork', action='store_false', dest='fork',
+                   help="Don't fork and continue in background on connect")
+    g.add_argument('--ppid', type=int,
+                   help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
+    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None,
+                   help="comma seperated domains to query with vpn dns")
     g.add_argument('--debug', action='store_true', default=False, help="Connect using pycharm remote debug.")
     p.add_argument('--split-routes', nargs='*', type=net_or_host_param,
                    help='List of split VPN hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
@@ -596,7 +607,6 @@ def finalize_args_and_env(args, env):
         args.vpn_domains = str.split(args.vpn_domains, ',')
 
 
-
 def main(args=None, environ=os.environ):
     global providers
     logger = logging.getLogger(__name__)
@@ -627,7 +637,8 @@ def main(args=None, environ=os.environ):
         finalize_args_and_env(args, env)
 
         if env.myaddr6 or env.netmask6:
-            logger.warning('WARNING: IPv6 address or netmask set. Support for IPv6 in %s should be considered BETA-QUALITY.' % p.prog)
+            logger.warning(
+                'WARNING: IPv6 address or netmask set. Support for IPv6 in %s should be considered BETA-QUALITY.' % p.prog)
         if args.dump:
             exe = providers.process.pid2exe(args.ppid)
             caller = '%s (PID %d)' % (exe, args.ppid) if exe else 'PID %d' % args.ppid
@@ -646,9 +657,12 @@ def main(args=None, environ=os.environ):
 
     except Exception as e:
         if args.self_test:
-            print('******************************************************************************************', file=stderr)
-            print('*** Self-test did not pass. Double-check that you are running as root (e.g. with sudo) ***', file=stderr)
-            print('******************************************************************************************', file=stderr)
+            print('******************************************************************************************',
+                  file=stderr)
+            print('*** Self-test did not pass. Double-check that you are running as root (e.g. with sudo) ***',
+                  file=stderr)
+            print('******************************************************************************************',
+                  file=stderr)
         raise SystemExit(*e.args)
     else:
         if args.self_test:
