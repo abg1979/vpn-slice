@@ -183,6 +183,7 @@ class WinRouteProvider(RouteProvider):
         logger = logging.getLogger(__name__)
         logger.info("[%s]", destination)
         if type(destination) is IPv4Network:
+            # workaround to get 1st address from the network
             destination = destination[0]
         info = win_exec([self.ps, 'Find-NetRoute', '-RemoteIPAddress', destination])
         lines = iter(info.splitlines())
@@ -216,13 +217,6 @@ class WinRouteProvider(RouteProvider):
         logger = logging.getLogger(__name__)
         logger.info("[%s] -- [%s] -- [%s]", device, state, mtu)
         # the adapter is already enabled for openconnect to start
-        # if state is not None:
-        #     enable_adapter_args = ['Enable-NetAdapter', '-Name', device]
-        #     disable_adapter_args = ['Disable-NetAdapter', '-Name', device, '-Confirm:$false']
-        #     if state == 'up':
-        #         win_exec([self.ps] + enable_adapter_args)
-        #     else:
-        #         win_exec([self.ps] + disable_adapter_args)
         if mtu is not None:
             args = ['Set-NetIPInterface']
             args.extend(('-InterfaceAlias', device))

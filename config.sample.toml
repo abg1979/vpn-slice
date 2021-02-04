@@ -8,6 +8,8 @@ routes = [
             'klam-sj.corp.adobe.com'
          ]
 
+vpn
+
 [subprocess]
     kill = []
     prevent_idle_timeout = false
@@ -23,6 +25,8 @@ routes = [
     splits = false
     host_names = false
     short_names = true
+    host_patterns = [
+    ]
 
 [nameserver]
     ns_hosts = false

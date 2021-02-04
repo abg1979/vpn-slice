@@ -29,6 +29,7 @@ setup(name="vpn-slice",
       extras_require={
         "setproctitle": ["setproctitle"],
         "dnspython": ["dnspython"],
+        "dnslib": ["dnslib"],
       },
       install_requires=["setproctitle", "dnspython"],
       license='GPL v3 or later',

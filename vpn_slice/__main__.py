@@ -14,6 +14,7 @@ import logging.handlers
 import pathlib
 from filelock import FileLock
 import pprint
+import re
 
 try:
     from setproctitle import setproctitle
@@ -474,7 +475,7 @@ config_args = [
     ('dump', lambda config: config['debug']['dump']),
     ('verbose', lambda config: config['debug']['verbose']),
     ('debug', lambda config: config['debug']['debug']),
-    ('split_routes', lambda config: [net_or_host_param(s) for s in config['split_routes']]),
+    ('host_patterns', lambda config: [re.compile(s) for s in config['routing']['host_patterns']]),
 ]
 
 
