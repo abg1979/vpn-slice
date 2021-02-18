@@ -4,7 +4,7 @@ import re
 import subprocess
 from ipaddress import ip_network, IPv4Network
 
-from .posix import HostsFileProvider, PosixProcessProvider
+from .posix import HostsFileProvider, PosixProcessProvider, PosixSplitDNSProvider
 from .provider import RouteProvider, TunnelPrepProvider
 from .util import get_executable
 import logging
@@ -261,4 +261,42 @@ class WinTunnelPrepProvider(TunnelPrepProvider):
              'Remove-NetRoute', '-PolicyStore', 'PersistentStore', '-Confirm:$false'], check=False)
 
 
+class WinSplitDNSProvider(PosixSplitDNSProvider):
+
+    def __init__(self):
+        super().__init__()
+        self.ps = get_executable("powershell.exe")
+
+    def set_nameservers(self, device, addresses):
+        logger = logging.getLogger(__name__)
+        logger.info("[%s]", device)
+        nameservers = "("
+        for index in range(0, len(addresses)):
+            nameservers = nameservers + '"'
+            nameservers = nameservers + addresses[index]
+            nameservers = nameservers + '"'
+            if index < len(addresses):
+                nameservers = nameservers + ','
+        nameservers = nameservers + ")"
+        win_exec([self.ps, 'Set-DnsClientServerAddress', '-InterfaceIndex ', device, "-ServerAddresses", nameservers])
+
+    def get_nameservers(self, device):
+        logger = logging.getLogger(__name__)
+        logger.info("[%s]", device)
+        info = win_exec(
+            [self.ps, 'Get-DnsClientServerAddress', '-InterfaceIndex ', device, "|", "Format-Table", "-AutoSize"])
+        lines = iter(info.splitlines())
+        records = parse_pwsh_table(lines)
+        nameservers = []
+        for record in records:
+            if record['ServerAddresses'] and len(record['ServerAddresses']) > 0:
+                nameservers.append({"device": record['InterfaceIndex'],
+                                    "family": record['AddressFamily'],
+                                    "servers": record['ServerAddresses']})
+        return nameservers
+
+    def reset_nameservers(self, device):
+        logger = logging.getLogger(__name__)
+        logger.info("[%s]", device)
+        win_exec([self.ps, 'Set-DnsClientServerAddress', '-InterfaceIndex ', device, "-ResetServerAddresses"])
 

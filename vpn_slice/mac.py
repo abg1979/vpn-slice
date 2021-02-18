@@ -113,9 +113,17 @@ class BSDRouteProvider(RouteProvider):
             #   https://gitlab.com/openconnect/vpnc-scripts/blob/https://gitlab.com/openconnect/vpnc-scripts/blob/921e8760/vpnc-script#L193
             self._ifconfig(device, 'inet', address.ip, address.ip, 'netmask', '255.255.255.255')
 
+    def set_nameservers(self, device, addresses):
+        pass
+
+    def get_nameservers(self, device):
+        pass
+
 
 class MacSplitDNSProvider(SplitDNSProvider):
-    def configure_domain_vpn_dns(self, domains, nameservers):
+    def configure_domain_vpn_dns(self, args, env):
+        domains = args.vpn_domains
+        nameservers = env.dns
         if not os.path.exists('/etc/resolver'):
             os.makedirs('/etc/resolver')
         for domain in domains:
@@ -124,7 +132,8 @@ class MacSplitDNSProvider(SplitDNSProvider):
                 for nameserver in nameservers:
                     resolver_file.write("nameserver {}\n".format(nameserver))
 
-    def deconfigure_domain_vpn_dns(self, domains, nameservers):
+    def deconfigure_domain_vpn_dns(self, args, env):
+        domains = args.vpn_domains
         for domain in domains:
             resolver_file_name = "/etc/resolver/{0}".format(domain)
             if os.path.exists(resolver_file_name):

@@ -68,17 +68,18 @@ def get_default_providers():
             process=ProcfsProvider,
             route=BSDRouteProvider,
             dns=DNSPythonProvider or DigProvider,
-            hosts=PosixHostsFileProvider,
+            hosts=PosixHostsFileProvider
         )
     elif platform.startswith('win'):
         from .posix import DigProvider
-        from .win import Win32ProcessProvider, WinRouteProvider, WinHostsFileProvider, WinTunnelPrepProvider
+        from .win import Win32ProcessProvider, WinRouteProvider, WinHostsFileProvider, WinTunnelPrepProvider, WinSplitDNSProvider
         return dict(
             process=Win32ProcessProvider,
             route=WinRouteProvider,
             dns=DNSPythonProvider or DigProvider,
             hosts=WinHostsFileProvider,
             prep=WinTunnelPrepProvider,
+            domain_vpn_dns=WinSplitDNSProvider,
         )
     else:
         return dict(
@@ -168,7 +169,7 @@ def do_disconnect(env, args):
 
     if args.vpn_domains is not None:
         try:
-            providers.domain_vpn_dns.deconfigure_domain_vpn_dns(args.vpn_domains, env.dns)
+            providers.domain_vpn_dns.deconfigure_domain_vpn_dns(args, env)
         except:
             print("WARNING: failed to deconfigure domains vpn dns", file=stderr)
 
@@ -270,7 +271,7 @@ def do_connect(env, args):
         if 'domain_vpn_dns' not in providers:
             print("WARNING: no split dns provider available; can't split dns", file=stderr)
         else:
-            providers.domain_vpn_dns.configure_domain_vpn_dns(args.vpn_domains, env.dns)
+            providers.domain_vpn_dns.configure_domain_vpn_dns(args, env)
 
 
 def do_post_connect(env, args):
@@ -483,6 +484,7 @@ config_args = [
     ('verbose', lambda config: config['debug']['verbose']),
     ('debug', lambda config: config['debug']['debug']),
     ('host_patterns', lambda config: [re.compile(s) for s in config['routing']['host_patterns']]),
+    ('upstream_dns_servers', lambda config: config['routing']['upstream_dns_servers']),
 ]
 
 
@@ -535,6 +537,9 @@ def parse_args_and_env(args=None, environ=os.environ):
                    help='Do not add nameserver aliases to /etc/hosts (default is to name them dns0.tun0, etc.)')
     g.add_argument('--nbns', action='store_true', dest='nbns',
                    help='Include NBNS (Windows/NetBIOS nameservers) as well as DNS nameservers')
+    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None,
+                   help="comma seperated domains to query with vpn dns")
+    g.add_argument('--upstream-dns-servers', nargs='*', help='List of dns servers in host:port format to be used in split dns')
     g = p.add_argument_group('Debugging options')
     g.add_argument('--self-test', action='store_true',
                    help='Stop after verifying that environment variables and providers are configured properly.')
@@ -546,8 +551,6 @@ def parse_args_and_env(args=None, environ=os.environ):
                    help="Don't fork and continue in background on connect")
     g.add_argument('--ppid', type=int,
                    help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
-    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None,
-                   help="comma seperated domains to query with vpn dns")
     g.add_argument('--debug', action='store_true', default=False, help="Connect using pycharm remote debug.")
     p.add_argument('--split-routes', nargs='*', type=net_or_host_param,
                    help='List of split VPN hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
@@ -567,6 +570,8 @@ def parse_args_and_env(args=None, environ=os.environ):
 def finalize_args_and_env(args, env):
     global providers
 
+    # set providers in args so that they can be used in the providers themselves
+    args.providers = providers
     # use the tunnel device as the VPN name if unspecified
     if args.name is None:
         args.name = env.tundev
@@ -603,8 +608,6 @@ def finalize_args_and_env(args, env):
     if args.route_splits:
         args.subnets.extend(env.splitinc)
         args.exc_subnets.extend(env.splitexc)
-    if args.vpn_domains is not None:
-        args.vpn_domains = str.split(args.vpn_domains, ',')
 
 
 def main(args=None, environ=os.environ):

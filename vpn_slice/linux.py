@@ -78,6 +78,12 @@ class Iproute2Provider(RouteProvider):
     def add_address(self, device, address):
         self._iproute('address', 'add', address, dev=device)
 
+    def set_nameservers(self, device, addresses):
+        pass
+
+    def get_nameservers(self, device):
+        pass
+
 
 class IptablesProvider(FirewallProvider):
     def __init__(self):

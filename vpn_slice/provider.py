@@ -139,6 +139,7 @@ class HostsProvider(metaclass=ABCMeta):
 
         """
 
+
 class TunnelPrepProvider:
     def create_tunnel(self, env, args):
         """Create tunnel device.
@@ -161,17 +162,32 @@ class TunnelPrepProvider:
 
         """
 
+
 class SplitDNSProvider:
-    def configure_domain_vpn_dns(self, domains, nameservers):
+    def configure_domain_vpn_dns(self, args, env):
         """Configure domain vpn dns.
 
         Base class behavior is to do nothing.
 
         """
 
-    def deconfigure_domain_vpn_dns(self, domains, nameservers):
+    def deconfigure_domain_vpn_dns(self, args, env):
         """Remove domain vpn dns.
 
         Base class behavior is to do nothing.
 
         """
+
+    @abstractmethod
+    def set_nameservers(self, device, addresses):
+        """Set nameserver for an interface."""
+
+    @abstractmethod
+    def reset_nameservers(self, device):
+        """Set nameserver for an interface."""
+
+    @abstractmethod
+    def get_nameservers(self, device):
+        """Get nameserver for an interface."""
+
+

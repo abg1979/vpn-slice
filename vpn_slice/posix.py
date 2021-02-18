@@ -1,10 +1,15 @@
 import os
 import subprocess
+from abc import ABC
+
 from ipaddress import ip_address
 from signal import SIGTERM
+import re
+from typing import List
 
-from .provider import DNSProvider, HostsProvider, ProcessProvider
+from .provider import DNSProvider, HostsProvider, ProcessProvider, SplitDNSProvider
 from .util import get_executable
+from .dnsserver import DNSServerProvider
 
 
 class DigProvider(DNSProvider):
@@ -18,7 +23,7 @@ class DigProvider(DNSProvider):
         search_domains = self.search_domains
 
         if not bind_addresses:
-            some_cls = [ self.base_cl + ['@{!s}'.format(dns) for dns in dns_servers] ]
+            some_cls = [self.base_cl + ['@{!s}'.format(dns) for dns in dns_servers]]
             field_requests = [hostname, 'A', hostname, 'AAAA']
         else:
             some_cls = []
@@ -124,3 +129,32 @@ class PosixProcessProvider(ProcessProvider):
             return True
         except ProcessLookupError:
             return False
+
+
+class PosixSplitDNSProvider(SplitDNSProvider, ABC):
+
+    def configure_domain_vpn_dns(self, args, env):
+        host_patterns: List[re.Pattern] = [re.compile(s) for s in args.vpn_domains]
+        self._provider.configure(upstream_servers=args.upstream_dns_servers, vpn_servers=env.dns,
+                                 host_patterns=host_patterns)
+
+        # find interface for vpn gateway
+        gwr = args.providers.route.get_route(env.gateway)
+        default_device = gwr['dev']
+        # set our dns for it
+        args.providers.domain_vpn_dns.set_nameservers(default_device, "127.0.0.1")
+        # set our dns for vpn interface
+        args.providers.domain_vpn_dns.set_nameservers(env.tundev, "127.0.0.1")
+        self._provider.start()
+
+    def deconfigure_domain_vpn_dns(self, args, env):
+        # find interface for vpn gateway
+        gwr = args.providers.route.get_route(env.gateway)
+        default_device = gwr['dev']
+        # set our dns for it
+        args.providers.domain_vpn_dns.reset_nameservers(default_device)
+        self._provider.stop()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._provider = DNSServerProvider()
