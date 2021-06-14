@@ -49,7 +49,9 @@ def get_default_providers():
             prep=CheckTunDevProvider,
         )
     elif platform.startswith('darwin'):
-        from .mac import PsProvider, BSDRouteProvider, MacSplitDNSProvider
+        from platform import release
+        from distutils.version import LooseVersion
+        from .mac import PsProvider, BSDRouteProvider, MacSplitDNSProvider, PfFirewallProvider
         from .posix import PosixHostsFileProvider
         from .dnspython import DNSPythonProvider
         return dict(
@@ -57,7 +59,8 @@ def get_default_providers():
             route=BSDRouteProvider,
             dns=DNSPythonProvider or DigProvider,
             hosts=PosixHostsFileProvider,
-            domain_vpn_dns = MacSplitDNSProvider,
+            domain_vpn_dns=MacSplitDNSProvider,
+            firewall = PfFirewallProvider if release() >= LooseVersion('10.6') else None,
         )
     elif platform.startswith('freebsd'):
         from .mac import BSDRouteProvider
@@ -92,8 +95,14 @@ def net_or_host_param(s):
         ip = hosts.pop()
         return hosts, ip_address(ip)
     else:
+        if s.lstrip().startswith('%'):
+            include = False
+            s = s.lstrip()[1:]
+        else:
+            include = True
+
         try:
-            return ip_network(s, strict=False)
+            return include, ip_network(s, strict=False)
         except ValueError:
             return s
 
@@ -150,8 +159,9 @@ def do_disconnect(env, args):
                 if args.verbose:
                     logger.warning("Killed pid %d from %s" % (pid, pidfile))
 
-    removed = providers.hosts.write_hosts({}, args.name)
-    logger.info("Removed %d hosts from /etc/hosts" % removed)
+    if 'hosts' in providers:
+        removed = providers.hosts.write_hosts({}, args.name)
+        logger.info("Removed %d hosts from /etc/hosts" % removed)
 
     # delete explicit route to gateway
     try:
@@ -497,7 +507,7 @@ def load_config(config_path, args):
 def parse_args_and_env(args=None, environ=os.environ):
     p = argparse.ArgumentParser()
     p.add_argument('routes', nargs='*', type=net_or_host_param,
-                   help='List of VPN-internal hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
+                   help='List of VPN-internal hostnames, included subnets (e.g. 192.168.0.0/24), excluded subnets (e.g. %%8.0.0.0/8), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
     p.add_argument('-c', '--config', type=pathlib.Path,
                    default=pathlib.Path(os.path.expanduser("~/.config/vpn-slice/config.toml")),
                    required=False)
@@ -527,6 +537,7 @@ def parse_args_and_env(args=None, environ=os.environ):
                    help='Do not add nameserver aliases to /etc/hosts (default is to name them dns0.tun0, etc.)')
     g.add_argument('--nbns', action='store_true', dest='nbns',
                    help='Include NBNS (Windows/NetBIOS nameservers) as well as DNS nameservers')
+    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None, help="comma seperated domains to query with vpn dns")
     g = p.add_argument_group('Debugging options')
     g.add_argument('--self-test', action='store_true',
                    help='Stop after verifying that environment variables and providers are configured properly.')
@@ -535,7 +546,6 @@ def parse_args_and_env(args=None, environ=os.environ):
     g.add_argument('-D', '--dump', default=True, action='store_false', help='Dump environment variables passed by caller')
     g.add_argument('--no-fork', action='store_false', dest='fork', help="Don't fork and continue in background on connect")
     g.add_argument('--ppid', type=int, help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
-    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None, help="comma seperated domains to query with vpn dns")
     g.add_argument('--debug', action='store_true', default=False, help="Connect using pycharm remote debug.")
     p.add_argument('--split-routes', nargs='*', type=net_or_host_param,
                    help='List of split VPN hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
@@ -578,10 +588,12 @@ def finalize_args_and_env(args, env):
     args.hosts = []
     args.aliases = {}
     for x in args.routes:
-        if isinstance(x, (IPv4Network, IPv6Network)):
-            args.subnets.append(x)
-        elif isinstance(x, str):
+        if isinstance(x, str):
             args.hosts.append(x)
+        elif x[0] in (True, False):
+            include, net = x
+            if include: args.subnets.append(net)
+            else: args.exc_subnets.append(net)
         else:
             hosts, ip = x
             args.aliases.setdefault(ip, []).extend(hosts)
@@ -594,6 +606,17 @@ def finalize_args_and_env(args, env):
     if args.vpn_domains is not None:
         args.vpn_domains = str.split(args.vpn_domains, ',')
 
+    return p, args, env
+
+def finalize_args_and_env(args, env):
+    global providers
+
+    # autodetect parent or grandparent process (skipping intermediary shell)
+    if args.ppid is None:
+        args.ppid = providers.process.ppid_of(None)
+        exe = providers.process.pid2exe(args.ppid)
+        if exe and os.path.basename(exe) in ('dash','bash','sh','tcsh','csh','ksh','zsh'):
+            args.ppid = providers.process.ppid_of(args.ppid)
 
 
 def main(args=None, environ=os.environ):
@@ -609,6 +632,7 @@ def main(args=None, environ=os.environ):
             import pydevd_pycharm
             pydevd_pycharm.settrace('localhost', port=9000, stdoutToServer=True, stderrToServer=True)
 
+        # Set platform-specific providers
         providers = slurpy()
         for pn, pv in get_default_providers().items():
             try:
@@ -617,31 +641,31 @@ def main(args=None, environ=os.environ):
                 providers[pn] = pv()
             except Exception as e:
                 logger.warning("WARNING: Couldn't configure {} provider: {}".format(pn, e))
-        missing_required = {p for p in ('route', 'process', 'hosts', 'dns') if p not in providers}
+
+        # Fail if necessary providers are missing
+        required = {'route', 'process'}
+        # The hosts provider is required unless:
+        #   1) '--no-ns-hosts --no-host-names' specified, or
+        #   2) '--no-ns-hosts' specified, but neither hosts nor aliases specified
+        if not args.ns_hosts and not args.host_names:
+            pass
+        elif not args.ns_hosts and not args.hosts and not args.aliases:
+            pass
+        else:
+            required.add('hosts')
+        # The DNS provider is required if:
+        #   1) Any hosts are specified
+        #   2) '--prevent-idle-timeout' is specified
+        if args.hosts or args.prevent_idle_timeout:
+            required.add('dns')
+        missing_required = {p for p in required if p not in providers}
         if missing_required:
             raise RuntimeError(
                 "Aborting because providers for %s are required; use --help for more information" % ' '.join(
                     missing_required))
 
+        # Finalize arguments that depend on providers
         finalize_args_and_env(args, env)
-
-        if env.myaddr6 or env.netmask6:
-            logger.warning('WARNING: IPv6 address or netmask set. Support for IPv6 in %s should be considered BETA-QUALITY.' % p.prog)
-        if args.dump:
-            exe = providers.process.pid2exe(args.ppid)
-            caller = '%s (PID %d)' % (exe, args.ppid) if exe else 'PID %d' % args.ppid
-
-            logger.warning('Called by %s with environment variables for vpnc-script:' % caller)
-            width = max((len(envar) for var, envar, *rest in vpncenv if envar in environ), default=0)
-            for var, envar, *rest in vpncenv:
-                if envar in environ:
-                    pyvar = var + '=' + repr(env[var]) if var else 'IGNORED'
-                    logger.warning('  %-*s => %s' % (width, envar, pyvar))
-            if env.splitinc:
-                logger.warning('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_INC_*', 'splitinc', env.splitinc))
-            if env.splitexc:
-                logger.warning('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_EXC_*', 'splitexc', env.splitexc))
-
 
     except Exception as e:
         if args.self_test:
@@ -649,12 +673,42 @@ def main(args=None, environ=os.environ):
             print('*** Self-test did not pass. Double-check that you are running as root (e.g. with sudo) ***', file=stderr)
             print('******************************************************************************************', file=stderr)
         raise SystemExit(*e.args)
+
     else:
         if args.self_test:
             print('***************************************************************************', file=stderr)
             print('*** Self-test passed. Try using vpn-slice with openconnect or vpnc now. ***', file=stderr)
             print('***************************************************************************', file=stderr)
             raise SystemExit()
+
+    if env.myaddr6 or env.netmask6:
+        print('WARNING: IPv6 address or netmask set. Support for IPv6 in %s should be considered BETA-QUALITY.' % p.prog, file=stderr)
+    if args.dump:
+        exe = providers.process.pid2exe(args.ppid)
+        caller = '%s (PID %d)'%(exe, args.ppid) if exe else 'PID %d' % args.ppid
+
+        print('Called by %s with environment variables for vpnc-script:' % caller, file=stderr)
+        width = max((len(envar) for var, envar, *rest in vpncenv if envar in environ), default=0)
+        for var, envar, *rest in vpncenv:
+            if envar in environ:
+                pyvar = var+'='+repr(env[var]) if var else 'IGNORED'
+                print('  %-*s => %s' % (width, envar, pyvar), file=stderr)
+        if env.splitinc:
+            print('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_INC_*', 'splitinc', env.splitinc), file=stderr)
+        if env.splitexc:
+            print('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_EXC_*', 'splitexc', env.splitexc), file=stderr)
+        if args.subnets:
+            print('Complete set of subnets to include in VPN routes:', file=stderr)
+            print('  ' + '\n  '.join(map(str, args.subnets)))
+        if args.exc_subnets:
+            print('Complete set of subnets to exclude from VPN routes:', file=stderr)
+            print('  ' + '\n  '.join(map(str, args.exc_subnets)))
+        if args.aliases:
+            print('Complete set of host aliases to add /etc/hosts entries for:', file=stderr)
+            print('  ' + '\n  '.join(args.aliases))
+        if args.hosts:
+            print('Complete set of host names to include in VPN routes after DNS lookup%s:' % (' (and add /etc/hosts entries for)' if args.host_names else ''), file=stderr)
+            print('  ' + '\n  '.join(args.hosts))
 
     logger.info("Args : [%s]" % pprint.pformat(args))
     logger.info("Env : [%s]" % pprint.pformat(env))
