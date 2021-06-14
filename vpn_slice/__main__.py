@@ -697,7 +697,7 @@ def main(args=None, environ=os.environ):
 
 if __name__ == '__main__':
     timed_rotating_handler = logging.handlers.TimedRotatingFileHandler(filename='vpnc.log', when='D')
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
                         handlers=[timed_rotating_handler])
     lock = FileLock("vpnc.lock")
     with lock:
