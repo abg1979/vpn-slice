@@ -8,7 +8,7 @@ from .provider import DNSProvider
 
 
 class DNSPythonProvider(DNSProvider):
-    def configure(self, dns_servers, *, bind_addresses=None, search_domains=()):
+    def configure(self, dns_servers, bind_addresses=None, search_domains=(), **kwargs):
         super().configure(dns_servers, bind_addresses=bind_addresses, search_domains=search_domains)
 
         self.resolver = Resolver(configure=False)

@@ -75,11 +75,12 @@ def get_default_providers():
         )
     elif platform.startswith('win'):
         from .posix import DigProvider
-        from .win import Win32ProcessProvider, WinRouteProvider, WinHostsFileProvider, WinTunnelPrepProvider
+        from .win import Win32ProcessProvider, WinRouteProvider, WinHostsFileProvider, WinTunnelPrepProvider,\
+            WinDNSProvider
         return dict(
             process=Win32ProcessProvider,
             route=WinRouteProvider,
-            dns=DNSPythonProvider or DigProvider,
+            dns=WinDNSProvider,
             hosts=WinHostsFileProvider,
             prep=WinTunnelPrepProvider,
         )
@@ -176,12 +177,11 @@ def do_disconnect(env, args):
         except sp.CalledProcessError:
             logger.warning("WARNING: failed to deconfigure firewall for VPN interface (%s)" % env.tundev)
 
-
     if args.vpn_domains is not None:
         try:
             providers.domain_vpn_dns.deconfigure_domain_vpn_dns(args.vpn_domains, env.dns)
         except:
-            print("WARNING: failed to deconfigure domains vpn dns", file=stderr)
+            logger.warning("failed to deconfigure domains vpn dns")
 
 
 def do_connect(env, args):
@@ -190,17 +190,16 @@ def do_connect(env, args):
     if args.banner and env.banner:
         logger.info("Connect Banner:")
         for l in env.banner.splitlines():
-            print("| " + l)
+            logger.info("| " + l)
 
     # set explicit route to gateway
     if env.gateway.is_loopback:
-        print("WARNING: Gateway address is loopback (%s); probably a local proxy.", file=stderr)
+        logger.warning("Gateway address is loopback; probably a local proxy.")
     else:
         gwr = providers.route.get_route(env.gateway)
         if gwr:
             providers.route.replace_route(env.gateway, **gwr)
-            if args.verbose > 1:
-                logger.info("Set explicit route to VPN gateway %s (%s)" % (env.gateway, ', '.join('%s %s' % kv for kv in gwr.items())))
+            logger.info("Set explicit route to VPN gateway %s (%s)" % (env.gateway, ', '.join('%s %s' % kv for kv in gwr.items())))
         else:
             logger.info("WARNING: no route to VPN gateway found %s; cannot set explicit route to it." % env.gateway)
 
@@ -242,12 +241,15 @@ def do_connect(env, args):
 
     # save routes for excluded subnets
     exc_subnets = []
+
     for dest in args.exc_subnets:
-        r = providers.route.get_route(dest)
+        r = gwr
+        if args.check_splits:
+            r = providers.route.get_route(dest)
         if r:
             exc_subnets.append((dest, r))
         else:
-            print("WARNING: Ignoring unroutable split-exclude %s" % dest, file=stderr)
+            logger.warning("Ignoring unroutable split-exclude %s" % dest)
 
     # set up routes to the DNS and Windows name servers, subnets, and local aliases
     ns = env.dns + env.dns6 + (env.nbns if args.nbns else [])
@@ -257,6 +259,10 @@ def do_connect(env, args):
     else:
         providers.route.flush_cache()
         logger.info("Added routes for %d nameservers, %d subnets, %d aliases." % (len(ns), len(args.subnets), len(args.aliases)))
+
+    # set the dns servers on the interface
+    providers.dns.configure(dns_servers=(env.dns + env.dns6), search_domains=args.domain, bind_addresses=env.myaddrs,
+                            dev=env.tundev)
 
     # if we did not add any route above we will add a default route with metric 5
     if not len(args.subnets):
@@ -273,11 +279,10 @@ def do_connect(env, args):
         providers.route.flush_cache()
         logger.warning("Restored routes for %d excluded subnets %s.", len(exc_subnets), exc_subnets)
 
-
     # Use vpn dns for provided domains
     if args.vpn_domains is not None:
         if 'domain_vpn_dns' not in providers:
-            print("WARNING: no split dns provider available; can't split dns", file=stderr)
+            logger.warning("no split dns provider available; can't split dns")
         else:
             providers.domain_vpn_dns.configure_domain_vpn_dns(args.vpn_domains, env.dns)
 
@@ -484,7 +489,7 @@ config_args = [
     ('dump', lambda config: config['debug']['dump']),
     ('verbose', lambda config: config['debug']['verbose']),
     ('debug', lambda config: config['debug']['debug']),
-    ('split_routes', lambda config: [net_or_host_param(s) for s in config['split_routes']]),
+    ('check_splits', lambda config: config['routing']['check_splits'])
 ]
 
 
@@ -507,7 +512,9 @@ def load_config(config_path, args):
 def parse_args_and_env(args=None, environ=os.environ):
     p = argparse.ArgumentParser()
     p.add_argument('routes', nargs='*', type=net_or_host_param,
-                   help='List of VPN-internal hostnames, included subnets (e.g. 192.168.0.0/24), excluded subnets (e.g. %%8.0.0.0/8), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
+                   help='List of VPN-internal hostnames, included subnets (e.g. 192.168.0.0/24), '
+                        'excluded subnets (e.g. %%8.0.0.0/8), or aliases (e.g. host1=192.168.1.2) '
+                        'to add to routing and /etc/hosts.')
     p.add_argument('-c', '--config', type=pathlib.Path,
                    default=pathlib.Path(os.path.expanduser("~/.config/vpn-slice/config.toml")),
                    required=False)
@@ -515,7 +522,8 @@ def parse_args_and_env(args=None, environ=os.environ):
     g.add_argument('-k', '--kill', default=[], action='append',
                    help='File containing PID to kill before disconnect (may be specified multiple times)')
     g.add_argument('-K', '--prevent-idle-timeout', action='store_true',
-                   help='Prevent idle timeout by doing random DNS lookups (interval set by $IDLE_TIMEOUT, defaulting to 10 minutes)')
+                   help='Prevent idle timeout by doing random DNS lookups (interval set by $IDLE_TIMEOUT, '
+                        'defaulting to 10 minutes)')
     g = p.add_argument_group('Informational options')
     g.add_argument('--banner', action='store_true', help='Print banner message (default is to suppress it)')
     g = p.add_argument_group('Routing and hostname options')
@@ -537,7 +545,9 @@ def parse_args_and_env(args=None, environ=os.environ):
                    help='Do not add nameserver aliases to /etc/hosts (default is to name them dns0.tun0, etc.)')
     g.add_argument('--nbns', action='store_true', dest='nbns',
                    help='Include NBNS (Windows/NetBIOS nameservers) as well as DNS nameservers')
-    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None, help="comma seperated domains to query with vpn dns")
+    g.add_argument('--domains-vpn-dns', dest='vpn_domains', default=None, help="comma seperated domains to query "
+                                                                               "with vpn dns")
+    g.add_argument('--no-check-splits', dest='check_splits', default=True, help="check split routes for validity.")
     g = p.add_argument_group('Debugging options')
     g.add_argument('--self-test', action='store_true',
                    help='Stop after verifying that environment variables and providers are configured properly.')
@@ -547,8 +557,6 @@ def parse_args_and_env(args=None, environ=os.environ):
     g.add_argument('--no-fork', action='store_false', dest='fork', help="Don't fork and continue in background on connect")
     g.add_argument('--ppid', type=int, help='PID of calling process (normally autodetected, when using openconnect or vpnc)')
     g.add_argument('--debug', action='store_true', default=False, help="Connect using pycharm remote debug.")
-    p.add_argument('--split-routes', nargs='*', type=net_or_host_param,
-                   help='List of split VPN hostnames, subnets (e.g. 192.168.0.0/24), or aliases (e.g. host1=192.168.1.2) to add to routing and /etc/hosts.')
     args = p.parse_args(args)
     logger = logging.getLogger(__name__)
     if 'config' in args and args.config is not None and args.config.exists():
@@ -592,8 +600,10 @@ def finalize_args_and_env(args, env):
             args.hosts.append(x)
         elif x[0] in (True, False):
             include, net = x
-            if include: args.subnets.append(net)
-            else: args.exc_subnets.append(net)
+            if include:
+                args.subnets.append(net)
+            else:
+                args.exc_subnets.append(net)
         else:
             hosts, ip = x
             args.aliases.setdefault(ip, []).extend(hosts)
@@ -605,18 +615,6 @@ def finalize_args_and_env(args, env):
         args.exc_subnets.extend(env.splitexc)
     if args.vpn_domains is not None:
         args.vpn_domains = str.split(args.vpn_domains, ',')
-
-    return p, args, env
-
-def finalize_args_and_env(args, env):
-    global providers
-
-    # autodetect parent or grandparent process (skipping intermediary shell)
-    if args.ppid is None:
-        args.ppid = providers.process.ppid_of(None)
-        exe = providers.process.pid2exe(args.ppid)
-        if exe and os.path.basename(exe) in ('dash','bash','sh','tcsh','csh','ksh','zsh'):
-            args.ppid = providers.process.ppid_of(args.ppid)
 
 
 def main(args=None, environ=os.environ):
@@ -642,6 +640,9 @@ def main(args=None, environ=os.environ):
             except Exception as e:
                 logger.warning("WARNING: Couldn't configure {} provider: {}".format(pn, e))
 
+        # Finalize arguments that depend on providers
+        finalize_args_and_env(args, env)
+
         # Fail if necessary providers are missing
         required = {'route', 'process'}
         # The hosts provider is required unless:
@@ -664,51 +665,49 @@ def main(args=None, environ=os.environ):
                 "Aborting because providers for %s are required; use --help for more information" % ' '.join(
                     missing_required))
 
-        # Finalize arguments that depend on providers
-        finalize_args_and_env(args, env)
-
     except Exception as e:
         if args.self_test:
-            print('******************************************************************************************', file=stderr)
-            print('*** Self-test did not pass. Double-check that you are running as root (e.g. with sudo) ***', file=stderr)
-            print('******************************************************************************************', file=stderr)
+            logger.info('******************************************************************************************')
+            logger.info('*** Self-test did not pass. Double-check that you are running as root (e.g. with sudo) ***')
+            logger.info('******************************************************************************************')
         raise SystemExit(*e.args)
 
     else:
         if args.self_test:
-            print('***************************************************************************', file=stderr)
-            print('*** Self-test passed. Try using vpn-slice with openconnect or vpnc now. ***', file=stderr)
-            print('***************************************************************************', file=stderr)
+            logger.info('***************************************************************************')
+            logger.info('*** Self-test passed. Try using vpn-slice with openconnect or vpnc now. ***')
+            logger.info('***************************************************************************')
             raise SystemExit()
 
     if env.myaddr6 or env.netmask6:
-        print('WARNING: IPv6 address or netmask set. Support for IPv6 in %s should be considered BETA-QUALITY.' % p.prog, file=stderr)
+        logger.info('WARNING: IPv6 address or netmask set. Support for IPv6 in %s should be considered BETA-QUALITY.' % p.prog)
     if args.dump:
         exe = providers.process.pid2exe(args.ppid)
         caller = '%s (PID %d)'%(exe, args.ppid) if exe else 'PID %d' % args.ppid
 
-        print('Called by %s with environment variables for vpnc-script:' % caller, file=stderr)
+        logger.info('Called by %s with environment variables for vpnc-script:' % caller)
         width = max((len(envar) for var, envar, *rest in vpncenv if envar in environ), default=0)
         for var, envar, *rest in vpncenv:
             if envar in environ:
                 pyvar = var+'='+repr(env[var]) if var else 'IGNORED'
-                print('  %-*s => %s' % (width, envar, pyvar), file=stderr)
+                logger.info('  %-*s => %s' % (width, envar, pyvar))
         if env.splitinc:
-            print('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_INC_*', 'splitinc', env.splitinc), file=stderr)
+            logger.info('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_INC_*', 'splitinc', env.splitinc))
         if env.splitexc:
-            print('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_EXC_*', 'splitexc', env.splitexc), file=stderr)
+            logger.info('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_EXC_*', 'splitexc', env.splitexc))
         if args.subnets:
-            print('Complete set of subnets to include in VPN routes:', file=stderr)
-            print('  ' + '\n  '.join(map(str, args.subnets)))
+            logger.info('Complete set of subnets to include in VPN routes:')
+
+            logger.info('  ' + '\n  '.join(map(str, args.subnets)))
         if args.exc_subnets:
-            print('Complete set of subnets to exclude from VPN routes:', file=stderr)
-            print('  ' + '\n  '.join(map(str, args.exc_subnets)))
+            logger.info('Complete set of subnets to exclude from VPN routes:')
+            logger.info('  ' + '\n  '.join(map(str, args.exc_subnets)))
         if args.aliases:
-            print('Complete set of host aliases to add /etc/hosts entries for:', file=stderr)
-            print('  ' + '\n  '.join(args.aliases))
+            logger.info('Complete set of host aliases to add /etc/hosts entries for:')
+            logger.info('  ' + '\n  '.join(args.aliases))
         if args.hosts:
-            print('Complete set of host names to include in VPN routes after DNS lookup%s:' % (' (and add /etc/hosts entries for)' if args.host_names else ''), file=stderr)
-            print('  ' + '\n  '.join(args.hosts))
+            logger.info('Complete set of host names to include in VPN routes after DNS lookup%s:' % (' (and add /etc/hosts entries for)' if args.host_names else ''))
+            logger.info('  ' + '\n  '.join(args.hosts))
 
     logger.info("Args : [%s]" % pprint.pformat(args))
     logger.info("Env : [%s]" % pprint.pformat(env))
@@ -750,9 +749,18 @@ def main(args=None, environ=os.environ):
 
 
 if __name__ == '__main__':
-    timed_rotating_handler = logging.handlers.TimedRotatingFileHandler(filename='vpnc.log', when='D')
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
-                        handlers=[timed_rotating_handler])
+    log_file_name = 'vpnc.log'
+    need_new_log_file = os.path.isfile(log_file_name)
+    handler = logging.handlers.RotatingFileHandler(filename=log_file_name, backupCount=5)
+    if need_new_log_file:
+        handler.doRollover()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
+                        handlers=[handler])
+    logger = logging.getLogger(__name__)
     lock = FileLock("vpnc.lock")
     with lock:
-        main()
+        try:
+            main()
+        except:
+            logger.error("Failed executing vpnc.", exc_info=True)
+            raise

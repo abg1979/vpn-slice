@@ -4,6 +4,7 @@ import re
 import subprocess
 from ipaddress import ip_network, IPv4Network
 
+from .dnspython import DNSPythonProvider
 from .posix import HostsFileProvider, PosixProcessProvider
 from .provider import RouteProvider, TunnelPrepProvider
 from .util import get_executable
@@ -12,13 +13,21 @@ import logging
 
 def win_exec(args, check=True):
     logger = logging.getLogger(__name__)
-    logger.debug("||||EXEC  ||||----> [%s]", args)
-    completed_process = subprocess.run(list(map(str, args)), universal_newlines=True, capture_output=True)
-    logger.debug("||||STDOUT||||----> [%s]", repr(completed_process.stdout))
-    logger.debug("||||STDERR||||----> [%s]", repr(completed_process.stderr))
+    process_args = list(map(str, args))
+    logger.info('||||EXEC  ||||----> [%s]', format_command(process_args))
+    completed_process = subprocess.run(process_args, universal_newlines=True, capture_output=True,
+                                       encoding='utf8')
+    for stdout_line in completed_process.stdout.splitlines():
+        logger.debug("||||STDOUT||||----> [%s]", repr(stdout_line))
+    for stderr_line in completed_process.stderr.splitlines():
+        logger.debug("||||STDERR||||----> [%s]", repr(stderr_line))
     if check:
         completed_process.check_returncode()
     return completed_process.stdout
+
+
+def format_command(args):
+    return ' '.join(args)
 
 
 def parse_pwsh_flat_table(lines):
@@ -148,7 +157,7 @@ class WinRouteProvider(RouteProvider):
     # TODO destination can be IP or IP with mask, convert that
     def add_route(self, destination, via=None, dev=None, src=None, mtu=None, **kwargs):
         logger = logging.getLogger(__name__)
-        logger.info("Args: [%s],[%s],[%s],[%s],[%s],[%s]", destination, via, dev, src, mtu, kwargs)
+        logger.debug("Args: [%s],[%s],[%s],[%s],[%s],[%s]", destination, via, dev, src, mtu, kwargs)
         args = ["-AddressFamily", self._family_option(destination)]
         args.extend(['-DestinationPrefix', ip_network(destination)])
         if mtu is not None:
@@ -166,8 +175,10 @@ class WinRouteProvider(RouteProvider):
             args.extend(['-InterfaceIndex', dev])
         if 'metric' in kwargs:
             args.extend(['-RouteMetric', int(kwargs['metric'])])
+        else:
+            args.extend(['-RouteMetric', 1])
         args.extend(['-PolicyStore', 'ActiveStore'])
-        logger.info("[%s] -- [%s]", args, kwargs)
+        logger.debug("[%s] -- [%s]", args, kwargs)
         win_exec([self.ps, 'New-NetRoute'] + args, check=False)
 
     def replace_route(self, destination, via=None, dev=None, src=None, mtu=None, **kwargs):
@@ -175,13 +186,13 @@ class WinRouteProvider(RouteProvider):
 
     def remove_route(self, destination):
         logger = logging.getLogger(__name__)
-        logger.info("[%s]", destination)
+        logger.debug("[%s]", destination)
         win_exec([self.ps, "Remove-NetRoute", '-AddressFamily', self._family_option(destination),
                   '-DestinationPrefix', destination, '-Confirm:$false'])
 
     def get_route(self, destination):
         logger = logging.getLogger(__name__)
-        logger.info("[%s]", destination)
+        logger.debug("[%s]", destination)
         if type(destination) is IPv4Network:
             destination = destination[0]
         info = win_exec([self.ps, 'Find-NetRoute', '-RemoteIPAddress', destination])
@@ -190,17 +201,17 @@ class WinRouteProvider(RouteProvider):
         return {
             'via': info_d['NextHop'],
             'dev': info_d['InterfaceIndex'],
-            'mtu': info_d['RouteMetric'],
+            'metric': info_d['RouteMetric'],
         }
 
     def flush_cache(self):
         logger = logging.getLogger(__name__)
-        logger.info("Flushing route cache.")
+        logger.debug("Flushing route cache.")
         win_exec(['netsh', 'interface', 'ip', 'delete', 'destinationcache'])
 
     def get_link_info(self, device):
         logger = logging.getLogger(__name__)
-        logger.info("[%s]", device)
+        logger.debug("[%s]", device)
         info = win_exec([self.ps, 'Get-NetIPInterface', '-InterfaceAlias', device, "|", "Format-Table", "-AutoSize"])
         lines = iter(info.splitlines())
         records = parse_pwsh_table(lines)
@@ -214,7 +225,7 @@ class WinRouteProvider(RouteProvider):
 
     def set_link_info(self, device, state, mtu=None):
         logger = logging.getLogger(__name__)
-        logger.info("[%s] -- [%s] -- [%s]", device, state, mtu)
+        logger.debug("[%s] -- [%s] -- [%s]", device, state, mtu)
         # the adapter is already enabled for openconnect to start
         # if state is not None:
         #     enable_adapter_args = ['Enable-NetAdapter', '-Name', device]
@@ -233,7 +244,7 @@ class WinRouteProvider(RouteProvider):
 
     def add_address(self, device, address):
         logger = logging.getLogger(__name__)
-        logger.info("[%s] -- [%s]", device, address)
+        logger.debug("[%s] -- [%s]", device, address)
         family = self._family_option(address)
         info = win_exec(
             [self.ps, 'Get-NetIPAddress', '-InterfaceAlias', device, '-AddressFamily', family, '|', 'Format-Table',
@@ -257,14 +268,24 @@ class WinTunnelPrepProvider(TunnelPrepProvider):
         logger = logging.getLogger(__name__)
         device = env.tundev
         # remove all existing routes for this device
-        logger.info("Removing all existing routes from 'ActiveStore' for [%s]", device)
+        logger.debug("Removing all existing routes from 'ActiveStore' for [%s]", device)
         win_exec(
             [self.ps, 'Get-NetRoute', '-InterfaceAlias', device, '-PolicyStore', 'ActiveStore', '|', 'Remove-NetRoute',
              '-PolicyStore', 'ActiveStore', '-Confirm:$false'], check=False)
-        logger.info("Removing all existing routes from 'PersistentStore' for [%s]", device)
+        logger.debug("Removing all existing routes from 'PersistentStore' for [%s]", device)
         win_exec(
             [self.ps, 'Get-NetRoute', '-InterfaceAlias', device, '-PolicyStore', 'PersistentStore', '|',
              'Remove-NetRoute', '-PolicyStore', 'PersistentStore', '-Confirm:$false'], check=False)
 
 
+class WinDNSProvider(DNSPythonProvider):
+    def __init__(self):
+        self.ps = get_executable("powershell.exe")
 
+    def configure(self, dns_servers, bind_addresses=None, search_domains=(), **kwargs):
+        super().configure(dns_servers, bind_addresses, search_domains, **kwargs)
+        if 'dev' in kwargs:
+            dns_server_args = list(map(lambda x: '"%s"' % x, dns_servers))
+            ps_dns_server_arg = '(%s)' % ','.join(dns_server_args)
+            win_exec([self.ps, 'Set-DnsClientServerAddress', '-InterfaceAlias', kwargs['dev'],
+                      '-ServerAddresses', ps_dns_server_arg])
