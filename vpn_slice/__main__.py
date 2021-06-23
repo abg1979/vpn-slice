@@ -164,11 +164,32 @@ def do_disconnect(env, args):
         removed = providers.hosts.write_hosts({}, args.name)
         logger.info("Removed %d hosts from /etc/hosts" % removed)
 
+    gwr = providers.route.get_route(env.gateway)
     # delete explicit route to gateway
     try:
         providers.route.remove_route(env.gateway)
     except sp.CalledProcessError:
         logger.warning("WARNING: could not delete route to VPN gateway (%s)" % env.gateway)
+
+    # save routes for excluded subnets
+    exc_subnets = []
+
+    for dest in args.exc_subnets:
+        r = gwr
+        if args.check_splits:
+            r = providers.route.get_route(dest)
+        if r:
+            exc_subnets.append((dest, r))
+        else:
+            logger.warning("Ignoring unroutable split-exclude %s" % dest)
+
+    # restore routes to excluded subnets
+    for dest, exc_route in exc_subnets:
+        providers.route.remove_route(dest, **exc_route)
+        logger.warning("Removing split-exclude route to %s (%s)" % (dest, ', '.join('%s %s' % kv for kv in exc_route.items())))
+    else:
+        providers.route.flush_cache()
+        logger.warning("Removed routes for %d excluded subnets %s.", len(exc_subnets), exc_subnets)
 
     # remove firewall rule blocking incoming traffic
     if 'firewall' in providers and not args.incoming:
@@ -754,7 +775,7 @@ if __name__ == '__main__':
     handler = logging.handlers.RotatingFileHandler(filename=log_file_name, backupCount=5)
     if need_new_log_file:
         handler.doRollover()
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
                         handlers=[handler])
     logger = logging.getLogger(__name__)
     lock = FileLock("vpnc.lock")
