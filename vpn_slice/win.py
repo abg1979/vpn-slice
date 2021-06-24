@@ -28,7 +28,7 @@ def win_exec(args, check=True) -> [str, int]:
     completed_process = subprocess.run(process_args, universal_newlines=True, capture_output=True,
                                        encoding='utf8')
     level = logging.DEBUG
-    if completed_process.returncode:
+    if check and completed_process.returncode:
         level = logging.WARNING
     stream_log('STDOUT', completed_process.stdout, level)
     stream_log('STDERR', completed_process.stderr, level)
@@ -55,7 +55,7 @@ def parse_pwsh_flat_table(lines):
             continue
         key, _, val = line.partition(':')
         info_d[key.strip()] = val.strip()
-    logger.debug(pprint.pprint(info_d))
+    logger.debug(pprint.pformat(info_d))
     return info_d
 
 
@@ -94,7 +94,7 @@ def parse_pwsh_table(lines):
             record[column[0]] = value.strip()
         logger.debug("Record = [%s]", record)
         info_d.append(record)
-    logger.debug(pprint.pprint(info_d))
+    logger.debug(pprint.pformat(info_d))
     return info_d
 
 
@@ -198,7 +198,7 @@ class WinRouteProvider(RouteProvider):
 
     def remove_route(self, destination, via=None, dev=None, src=None, mtu=None, **kwargs):
         logger = logging.getLogger(__name__)
-        logger.debug("[%s][%s]", destination, kwargs.get('route_destination'))
+        logger.debug("[%s]", destination)
         if type(destination) is not IPv4Network:
             destination = IPv4Network(destination)
         win_exec(ps + ["Remove-NetRoute", '-AddressFamily', _family_option(destination),
@@ -218,8 +218,7 @@ class WinRouteProvider(RouteProvider):
             return {
                 'via': info_d['NextHop'],
                 'dev': info_d['InterfaceIndex'],
-                'metric': info_d['RouteMetric'],
-                'route_destination': info_d['DestinationPrefix']
+                'metric': info_d['RouteMetric']
             }
         else:
             lines = iter(info.splitlines())
@@ -227,8 +226,7 @@ class WinRouteProvider(RouteProvider):
             return {
                 'via': info_d['NextHop'],
                 'dev': info_d['ifIndex'],
-                'metric': info_d['RouteMetric'],
-                'route_destination': info_d['DestinationPrefix']
+                'metric': info_d['RouteMetric']
             }
 
     def flush_cache(self):

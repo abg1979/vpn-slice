@@ -15,6 +15,8 @@ import pathlib
 from filelock import FileLock
 import pprint
 
+FORMAT_ARGS = '  %-*s => %r'
+
 try:
     from setproctitle import setproctitle
 except ImportError:
@@ -650,6 +652,9 @@ def main(args=None, environ=os.environ):
         if args.debug:
             import pydevd_pycharm
             pydevd_pycharm.settrace('localhost', port=9000, stdoutToServer=True, stderrToServer=True)
+        if args.verbose:
+            root_logger = logging.getLogger()
+            root_logger.setLevel(logging.DEBUG)
 
         # Set platform-specific providers
         providers = slurpy()
@@ -717,21 +722,21 @@ def main(args=None, environ=os.environ):
         if env.splitexc:
             logger.info('  %-*s => %s=%r' % (width, 'CISCO_*SPLIT_EXC_*', 'splitexc', env.splitexc))
         if args.subnets:
-            logger.info('Complete set of subnets to include in VPN routes:')
-
-            logger.info('  ' + '\n  '.join(map(str, args.subnets)))
+            logger.info(FORMAT_ARGS % (width, 'Complete set of subnets to include in VPN routes', args.subnets))
         if args.exc_subnets:
-            logger.info('Complete set of subnets to exclude from VPN routes:')
-            logger.info('  ' + '\n  '.join(map(str, args.exc_subnets)))
+            logger.info(
+                FORMAT_ARGS % (width, 'Complete set of subnets to exclude from VPN routes', args.exc_subnets))
         if args.aliases:
-            logger.info('Complete set of host aliases to add /etc/hosts entries for:')
-            logger.info('  ' + '\n  '.join(args.aliases))
+            logger.info(
+                FORMAT_ARGS % (width, 'Complete set of host aliases to add /etc/hosts entries for', args.aliases))
         if args.hosts:
-            logger.info('Complete set of host names to include in VPN routes after DNS lookup%s:' % (' (and add /etc/hosts entries for)' if args.host_names else ''))
-            logger.info('  ' + '\n  '.join(args.hosts))
+            logger.info(FORMAT_ARGS % (width,
+                                       'Complete set of host names to include in VPN routes after DNS lookup%s:' % (
+                                           ' (and add /etc/hosts entries for)' if args.host_names else ''),
+                                       args.hosts))
 
-    logger.info("Args : [%s]" % pprint.pformat(args))
-    logger.info("Env : [%s]" % pprint.pformat(env))
+    logger.debug("Args : [%s]" % pprint.pformat(args))
+    logger.debug("Env : [%s]" % pprint.pformat(env))
 
     if env.reason is None:
         raise SystemExit("Must be called as vpnc-script, with $reason set; use --help for more information")
@@ -775,7 +780,7 @@ if __name__ == '__main__':
     handler = logging.handlers.RotatingFileHandler(filename=log_file_name, backupCount=5)
     if need_new_log_file:
         handler.doRollover()
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(funcName)s %(message)s',
                         handlers=[handler])
     logger = logging.getLogger(__name__)
     lock = FileLock("vpnc.lock")
